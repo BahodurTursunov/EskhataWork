@@ -4,16 +4,19 @@ using System.Collections.Generic;
 using System.Linq;
 using Sungero.Core;
 using Sungero.CoreEntities;
+using System.Text;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using DotNetEnv;
+using System.IO;
+
 
 namespace litiko.DocflowEskhata.Server
 {
   public class ModuleFunctions
   {
-
     /// <summary>
     /// Создать и заполнить временную таблицу для конвертов.
     /// </summary>
@@ -126,70 +129,103 @@ namespace litiko.DocflowEskhata.Server
       return Structures.Module.ZipCodeAndAddress.Create(zipCode, address);
     }
     
+    
     [Public, Remote(IsPure = true)]
     public static string TranslateRuToTj(string text)
     {
-      return AskChatGPT(text, "ru->tj");
+      return AskGemini(text, "ru->tj");
     }
     
     [Public, Remote(IsPure = true)]
     public static string TranslateTjToRu(string text)
     {
-      return AskChatGPT(text, "tj->ru");
+      return AskGemini(text, "tj->ru");
     }
     
     [Public, Remote(IsPure = true)]
     public static string TranslateRuToEn(string text)
     {
-      return AskChatGPT(text, "ru->en");
+      return AskGemini(text, "ru->en");
     }
     
-    private static string AskChatGPT(string text, string direction)
+    private static string AskGemini(string text, string direction)
     {
-      var apiKeys = new[]
-      {
-        Resources.ApiKeyGPT1,
-        Resources.ApiKeyGPT2
-      };
+      string apiKey = string.Empty;
       
-      if(string.IsNullOrWhiteSpace(text))
+      var key = Constants.Module.ApiKey2;
+
+      try
+      {
+        //var createCommand = string.Format(Queries.Module.CreateApiKeyTable, key); // расскоментировать при первом выполнении метода, потом закоментировать обратно
+        
+        var selectCommand =  string.Format(Queries.Module.SelectApiKeyGemini, key);
+        
+        //var executionCreateResult = Sungero.Docflow.PublicFunctions.Module.ExecuteScalarSQLCommand(createCommand);
+        
+        //Sungero.Docflow.PublicFunctions.Module.ExecuteScalarSQLCommand(createCommand); // расскоментировать при первом выполнении метода, потом закоментировать обратно
+        
+        var executionSelectResult = Sungero.Docflow.PublicFunctions.Module.ExecuteScalarSQLCommand(selectCommand);
+        
+        if (!(executionSelectResult is DBNull) && executionSelectResult != null)
+        {
+          apiKey = executionSelectResult.ToString();
+          Logger.Debug("ApiKey successfully retrieved from the database.");
+        }
+        else
+        {
+          Logger.Debug("ApiKey was not found in the database. The initial key from constants will be used if available.");
+        }
+      }
+      catch (Exception ex)
+      {
+        Logger.Error("An error occurred while accessing the database for ApiKey.", ex);
+        return string.Empty;
+      }
+      
+      if (string.IsNullOrWhiteSpace(text))
         return string.Empty;
       
-      var url = "https://api.openai.com/v1/chat/completions";
-      
-      string systemPrompt;
+      string translationInstruction;
       
       switch (direction)
       {
         case "ru->tj":
-          systemPrompt = "You are a professional translator. Translate from Russian to Tajik. Return only the translation, no comments.";
+          translationInstruction = "Ты — профессиональный переводчик. Переведи следующий текст с русского на таджикский. Верни только перевод, без каких-либо комментариев и пояснений.";
           break;
         case "tj->ru":
-          systemPrompt = "You are a professional translator. Translate from Tajik to Russian. Return only the translation, no comments.";
+          translationInstruction = "Ты — профессиональный переводчик. Переведи следующий текст с таджикского на русский. Верни только перевод, без каких-либо комментариев и пояснений.";
           break;
         case "ru->en":
-          systemPrompt = "You are a professional translator. Translate from Russian to English. Return only the translation, no comments.";
+          translationInstruction = "Ты — профессиональный переводчик. Переведи следующий текст с русского на английский. Верни только перевод, без каких-либо комментариев и пояснений.";
           break;
         default:
-          systemPrompt = "You are a professional translator. Return only the translation, no comments.";
+          translationInstruction = "Ты — профессиональный переводчик. Верни только перевод текста, без комментариев.";
           break;
       }
       
-      foreach (var apiKey in apiKeys)
+      var fullPrompt = $"{translationInstruction}\n\n---\n\n{text}";
+      
+      foreach (var api in apiKey)
       {
-        using(var client = new HttpClient())
+        var url = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={api}";
+        
+        using (var client = new HttpClient())
         {
-          client.DefaultRequestHeaders.Clear();
-          client.DefaultRequestHeaders.Add("Authorization", "Bearer " + apiKey);
-          
           var payload = new JObject
           {
-            ["model"] = "gpt-4o-mini",
-            ["temperature"] = 0,
-            ["messages"] = new JArray
+            ["contents"] = new JArray
             {
-              new JObject { ["role"] = "system", ["content"] = systemPrompt },
-              new JObject { ["role"] = "user",   ["content"] = text }
+              new JObject
+              {
+                ["parts"] = new JArray
+                {
+                  new JObject { ["text"] = fullPrompt }
+                }
+              }
+            },
+            ["generationConfig"] = new JObject
+            {
+              ["temperature"] = 0
             }
           };
           
@@ -199,24 +235,29 @@ namespace litiko.DocflowEskhata.Server
           
           if (response.IsSuccessStatusCode)
           {
-            var parsed = JObject.Parse(responseJson);
-            var translation = parsed["choices"]?[0]?["message"]?["content"]?.ToString();
-            return translation?.Trim() ?? string.Empty;
+            try
+            {
+              var parsed = JObject.Parse(responseJson);
+              var translation = parsed["candidates"]?[0]?["content"]?["parts"]?[0]?["text"]?.ToString();
+              return translation?.Trim() ?? string.Empty;
+            }
+            catch (Exception ex)
+            {
+              Logger.Error($"Ошибка парсинга ответа от Gemini: {ex.Message} || Ответ: {responseJson}");
+            }
           }
-          else if((int)response.StatusCode == 429)
+          else if((int)response.StatusCode == 429) // Too Many Requests
           {
-            Logger.Error($"Ключ превысил лимит. Пробуем следующий.");
-            continue;
+            Logger.Error($"Ключ превысил лимит");
           }
+          
           else
           {
-            Logger.Error($"{response.StatusCode} || {responseJson}");
-            throw new Exception($"Повторите попытку через минуту.");
+            Logger.Error($"Ошибка от Gemini API: {response.StatusCode} || {responseJson}");
           }
         }
       }
-      
-      throw new Exception("Превышен лимит запросов, пожалуйста повторите попытку через минуту");
+      return string.Empty;
     }
   }
 }
