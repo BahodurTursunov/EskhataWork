@@ -3144,9 +3144,7 @@ namespace litiko.Integration.Server
     /// <param name="dataElements">Информация о персоне в виде XElement.</param>
     /// <returns>Структура с персоной и признаком изменения<string>)</returns>
     public Structures.Module.ProcessingPersonResult ProcessingPerson(System.Xml.Linq.XElement personData, Structures.Module.FIOInfo fioInfo, litiko.Eskhata.IPerson person)
-    {              
-      const string dateFormat = "dd.MM.yyyy";
-      
+    {
       var isID = personData.Element("ID")?.Value;
       var isName = personData.Element("NAME")?.Value;
       var isSex = personData.Element("SEX")?.Value;
@@ -3437,8 +3435,8 @@ namespace litiko.Integration.Server
       if(!string.IsNullOrEmpty(isInternalAcc) && person.AccountEskhatalitiko != isInternalAcc)
       {
         Logger.DebugFormat("Change SINlitiko: current:{0}, new:{1}", person.AccountEskhatalitiko, isInternalAcc);
-        person.AccountEskhatalitiko = isInternalAcc;                        
-      } 
+        person.AccountEskhatalitiko = isInternalAcc;
+      }
       
       /* !!! IdentityDocuments !!! */
       if (isIdentityDocument != null)
